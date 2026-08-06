@@ -8,10 +8,13 @@ EMBED_MODEL = "voyage-3-lite"
 CHAT_MODEL = "claude-sonnet-4-5"
 TOP_K = 4
 
-SYSTEM_PROMPT = """You are a Q&A assistant over a set of Claude Code study notes.
-Answer only using the provided context chunks. If the context doesn't contain
-the answer, say you don't know. Always answer in Traditional Chinese (繁體中文).
-Cite which note(s) you used by title at the end of your answer."""
+SYSTEM_PROMPT = """You are a Q&A assistant over a set of Claude Code study notes,
+having a multi-turn conversation with the user. Answer only using the provided
+context chunks for the current question; you may also use earlier turns in the
+conversation to resolve references like "that" or follow-up questions. If the
+context doesn't contain the answer, say you don't know. Always answer in
+Traditional Chinese (繁體中文). Cite which note(s) you used by title at the end
+of your answer."""
 
 
 class RagPipeline:
@@ -20,7 +23,8 @@ class RagPipeline:
         self.anthropic = anthropic.Anthropic()
         self.store = VectorStore()
 
-    def ask(self, question: str, top_k: int = TOP_K) -> dict:
+    def ask(self, question: str, history: list[dict] | None = None, top_k: int = TOP_K) -> dict:
+        history = history or []
         query_embedding = self.voyage.embed(
             [question], model=EMBED_MODEL, input_type="query"
         ).embeddings[0]
@@ -29,11 +33,14 @@ class RagPipeline:
         context = "\n\n---\n\n".join(f"[{m['title']}]\n{m['text']}" for m in matches)
         user_message = f"Context:\n{context}\n\nQuestion: {question}"
 
+        messages = [{"role": h["role"], "content": h["content"]} for h in history]
+        messages.append({"role": "user", "content": user_message})
+
         response = self.anthropic.messages.create(
             model=CHAT_MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            messages=messages,
         )
         answer = "".join(
             block.text for block in response.content if block.type == "text"

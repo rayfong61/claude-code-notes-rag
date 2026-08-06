@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.ingest import chunk_by_heading, parse_frontmatter
+from backend.rag import RagPipeline
 from backend.store import VectorStore
 
 HAS_API_KEYS = bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(
@@ -106,3 +107,60 @@ def test_ask_endpoint_returns_cited_answer():
     assert body["answer"]
     assert len(body["sources"]) > 0
     assert any("Hook" in s["title"] for s in body["sources"])
+
+
+class _FakeVoyageClient:
+    def embed(self, texts, model, input_type):
+        class _Result:
+            embeddings = [[1.0, 0.0, 0.0] for _ in texts]
+
+        return _Result()
+
+
+class _FakeAnthropicMessages:
+    def __init__(self):
+        self.last_call = None
+
+    def create(self, **kwargs):
+        self.last_call = kwargs
+
+        class _Block:
+            type = "text"
+            text = "測試回答，引用 CLAUDE.md。"
+
+        class _Response:
+            content = [_Block()]
+
+        return _Response()
+
+
+class _FakeAnthropicClient:
+    def __init__(self):
+        self.messages = _FakeAnthropicMessages()
+
+
+def test_rag_pipeline_forwards_history_to_claude(tmp_path):
+    """Unit test with fake API clients: no network calls, no rate limits."""
+    fake_index = [
+        {"id": "a", "title": "Hooks", "source_url": "u1", "text": "hooks content", "embedding": [1.0, 0.0, 0.0]},
+    ]
+    index_path = tmp_path / "index.json"
+    index_path.write_text(json.dumps(fake_index), encoding="utf-8")
+
+    pipeline = RagPipeline.__new__(RagPipeline)
+    pipeline.voyage = _FakeVoyageClient()
+    pipeline.anthropic = _FakeAnthropicClient()
+    pipeline.store = VectorStore(index_path=index_path)
+
+    history = [
+        {"role": "user", "content": "Claude Code 的 Hooks 是什麼？"},
+        {"role": "assistant", "content": "Hooks 是強制執行的機制。"},
+    ]
+    result = pipeline.ask("它跟 CLAUDE.md 有什麼不同？", history=history)
+
+    sent_messages = pipeline.anthropic.messages.last_call["messages"]
+    assert sent_messages[0] == history[0]
+    assert sent_messages[1] == history[1]
+    assert sent_messages[-1]["role"] == "user"
+    assert "它跟 CLAUDE.md 有什麼不同" in sent_messages[-1]["content"]
+    assert result["answer"] == "測試回答，引用 CLAUDE.md。"

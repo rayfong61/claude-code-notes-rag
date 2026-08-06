@@ -27,8 +27,14 @@ def get_pipeline() -> RagPipeline:
     return _pipeline
 
 
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
 class AskRequest(BaseModel):
     question: str
+    history: list[HistoryMessage] = []
 
 
 class Source(BaseModel):
@@ -48,4 +54,5 @@ def health():
 
 @app.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest):
-    return get_pipeline().ask(request.question)
+    history = [h.model_dump() for h in request.history]
+    return get_pipeline().ask(request.question, history=history)
