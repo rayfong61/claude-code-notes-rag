@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.ingest import chunk_by_heading, parse_frontmatter
-from backend.rag import NO_MATCH_ANSWER, RagPipeline
+from backend.rag import RagPipeline
 from backend.store import VectorStore
 
 HAS_API_KEYS = bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(
@@ -166,55 +166,89 @@ def test_rag_pipeline_forwards_history_to_claude(tmp_path):
     assert result["answer"] == "測試回答，引用 CLAUDE.md。"
 
 
-class _FailingAnthropicMessages:
-    """Claude must never be called when retrieval found nothing relevant."""
+def test_ask_puts_topic_list_in_system_prompt_and_scores_in_context(tmp_path):
+    """Claude, not a Python-side score cutoff, judges relevance now — so it
+    needs the full topic list (for meta-questions like "how many notes are
+    there") and per-chunk relevance scores (to avoid trusting weak matches)."""
+    fake_index = [
+        {"id": "a", "title": "Hooks", "source_url": "u1", "text": "hooks content", "embedding": [1.0, 0.0, 0.0]},
+        {"id": "b", "title": "Plugins", "source_url": "u2", "text": "plugins content", "embedding": [0.0, 1.0, 0.0]},
+    ]
+    index_path = tmp_path / "index.json"
+    index_path.write_text(json.dumps(fake_index), encoding="utf-8")
+
+    pipeline = RagPipeline.__new__(RagPipeline)
+    pipeline.voyage = _FakeVoyageClient()
+    pipeline.anthropic = _FakeAnthropicClient()
+    pipeline.store = VectorStore(index_path=index_path)
+
+    pipeline.ask("隨便問點什麼")
+
+    call = pipeline.anthropic.messages.last_call
+    assert "Hooks" in call["system"]
+    assert "Plugins" in call["system"]
+
+    user_message = call["messages"][-1]["content"]
+    assert "relevance=" in user_message
+
+
+class _FakeAnthropicMessagesWithAnswer:
+    """Fixed-answer fake client so tests control exactly what Claude 'said'."""
+
+    def __init__(self, answer_text: str):
+        self.answer_text = answer_text
+        self.last_call = None
 
     def create(self, **kwargs):
-        raise AssertionError("Claude should not be called for an irrelevant question")
+        self.last_call = kwargs
 
-    def stream(self, **kwargs):
-        raise AssertionError("Claude should not be called for an irrelevant question")
+        class _Block:
+            type = "text"
+
+        block = _Block()
+        block.text = self.answer_text
+
+        class _Response:
+            content = [block]
+
+        return _Response()
 
 
-class _FailingAnthropicClient:
-    def __init__(self):
-        self.messages = _FailingAnthropicMessages()
-
-
-def _irrelevant_index_path(tmp_path):
-    # _FakeVoyageClient always embeds queries as [1, 0, 0]; an orthogonal
-    # chunk embedding gives cosine similarity 0.0, well below the threshold.
+def _two_chunk_index(tmp_path):
     fake_index = [
-        {"id": "a", "title": "Hooks", "source_url": "u1", "text": "hooks content", "embedding": [0.0, 1.0, 0.0]},
+        {"id": "a", "title": "Hooks", "source_url": "u1", "text": "hooks content", "embedding": [1.0, 0.0, 0.0]},
+        {"id": "b", "title": "Plugins", "source_url": "u2", "text": "plugins content", "embedding": [0.9, 0.1, 0.0]},
     ]
     index_path = tmp_path / "index.json"
     index_path.write_text(json.dumps(fake_index), encoding="utf-8")
     return index_path
 
 
-def test_ask_skips_claude_and_returns_no_match_answer_for_irrelevant_question(tmp_path):
+def test_sources_exclude_titles_the_answer_never_mentions(tmp_path):
     pipeline = RagPipeline.__new__(RagPipeline)
     pipeline.voyage = _FakeVoyageClient()
-    pipeline.anthropic = _FailingAnthropicClient()
-    pipeline.store = VectorStore(index_path=_irrelevant_index_path(tmp_path))
+    pipeline.anthropic = _FakeAnthropicClient()  # fixed answer mentions neither "Hooks" nor "Plugins"
+    pipeline.store = VectorStore(index_path=_two_chunk_index(tmp_path))
 
     result = pipeline.ask("t")
 
-    assert result == {"answer": NO_MATCH_ANSWER, "sources": []}
+    assert result["sources"] == []
 
 
-def test_ask_stream_skips_claude_and_yields_no_match_answer_for_irrelevant_question(tmp_path):
+class _FakeAnthropicClientWithAnswer:
+    def __init__(self, answer_text: str):
+        self.messages = _FakeAnthropicMessagesWithAnswer(answer_text)
+
+
+def test_sources_include_titles_the_answer_actually_cites(tmp_path):
     pipeline = RagPipeline.__new__(RagPipeline)
     pipeline.voyage = _FakeVoyageClient()
-    pipeline.anthropic = _FailingAnthropicClient()
-    pipeline.store = VectorStore(index_path=_irrelevant_index_path(tmp_path))
+    pipeline.anthropic = _FakeAnthropicClientWithAnswer("依據 Hooks 這篇筆記，答案是...")
+    pipeline.store = VectorStore(index_path=_two_chunk_index(tmp_path))
 
-    events = list(pipeline.ask_stream("t"))
+    result = pipeline.ask("Hooks 是什麼？")
 
-    assert events == [
-        {"type": "delta", "text": NO_MATCH_ANSWER},
-        {"type": "done", "sources": []},
-    ]
+    assert result["sources"] == [{"title": "Hooks", "url": "u1"}]
 
 
 def test_ask_stream_endpoint_emits_error_event_on_exception(monkeypatch):
