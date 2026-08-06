@@ -1,7 +1,10 @@
 """FastAPI app exposing the Claude Code notes RAG pipeline."""
+import json
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .rag import RagPipeline
@@ -56,3 +59,14 @@ def health():
 def ask(request: AskRequest):
     history = [h.model_dump() for h in request.history]
     return get_pipeline().ask(request.question, history=history)
+
+
+@app.post("/ask/stream")
+def ask_stream(request: AskRequest):
+    history = [h.model_dump() for h in request.history]
+
+    def event_generator():
+        for event in get_pipeline().ask_stream(request.question, history=history):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -23,8 +23,7 @@ class RagPipeline:
         self.anthropic = anthropic.Anthropic()
         self.store = VectorStore()
 
-    def ask(self, question: str, history: list[dict] | None = None, top_k: int = TOP_K) -> dict:
-        history = history or []
+    def _retrieve(self, question: str, history: list[dict], top_k: int):
         query_embedding = self.voyage.embed(
             [question], model=EMBED_MODEL, input_type="query"
         ).embeddings[0]
@@ -35,6 +34,21 @@ class RagPipeline:
 
         messages = [{"role": h["role"], "content": h["content"]} for h in history]
         messages.append({"role": "user", "content": user_message})
+        return messages, matches
+
+    @staticmethod
+    def _sources_from_matches(matches: list[dict]) -> list[dict]:
+        sources = []
+        seen = set()
+        for m in matches:
+            if m["title"] in seen:
+                continue
+            seen.add(m["title"])
+            sources.append({"title": m["title"], "url": m["source_url"]})
+        return sources
+
+    def ask(self, question: str, history: list[dict] | None = None, top_k: int = TOP_K) -> dict:
+        messages, matches = self._retrieve(question, history or [], top_k)
 
         response = self.anthropic.messages.create(
             model=CHAT_MODEL,
@@ -46,12 +60,20 @@ class RagPipeline:
             block.text for block in response.content if block.type == "text"
         )
 
-        sources = []
-        seen = set()
-        for m in matches:
-            if m["title"] in seen:
-                continue
-            seen.add(m["title"])
-            sources.append({"title": m["title"], "url": m["source_url"]})
+        return {"answer": answer, "sources": self._sources_from_matches(matches)}
 
-        return {"answer": answer, "sources": sources}
+    def ask_stream(self, question: str, history: list[dict] | None = None, top_k: int = TOP_K):
+        """Yields {"type": "delta", "text": ...} chunks as Claude generates the
+        answer, then a final {"type": "done", "sources": [...]}."""
+        messages, matches = self._retrieve(question, history or [], top_k)
+
+        with self.anthropic.messages.stream(
+            model=CHAT_MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield {"type": "delta", "text": text}
+
+        yield {"type": "done", "sources": self._sources_from_matches(matches)}

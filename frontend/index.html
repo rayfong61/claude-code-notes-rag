@@ -301,20 +301,42 @@
     renderChat();
 
     try {
-      const res = await fetch(`${API_BASE}/ask`, {
+      const res = await fetch(`${API_BASE}/ask/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, history }),
       });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         throw new Error(`伺服器回傳 ${res.status}`);
       }
 
-      const data = await res.json();
-      pendingMessage.content = data.answer;
-      pendingMessage.sources = data.sources;
-      pendingMessage.pending = false;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const events = buffer.split("\n\n");
+        buffer = events.pop(); // last chunk may be incomplete, keep for next read
+
+        for (const raw of events) {
+          if (!raw.startsWith("data: ")) continue;
+          const event = JSON.parse(raw.slice("data: ".length));
+
+          if (event.type === "delta") {
+            pendingMessage.pending = false;
+            pendingMessage.content += event.text;
+            renderChat();
+          } else if (event.type === "done") {
+            pendingMessage.sources = event.sources;
+            renderChat();
+          }
+        }
+      }
     } catch (err) {
       pendingMessage.pending = false;
       pendingMessage.error = true;
