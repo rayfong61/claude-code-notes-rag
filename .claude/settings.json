@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python backend/*.py *)",
+      "Bash(python backend/*.py)",
+      "Bash(python scripts/*.py *)",
+      "Bash(python scripts/*.py)",
+      "Bash(pip install *)",
+      "Bash(pytest *)",
+      "Bash(pytest)",
+      "Bash(uvicorn *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Edit(backend/**)",
+      "Edit(frontend/**)",
+      "Edit(tests/**)",
+      "Edit(scripts/**)",
+      "Edit(data/notes/**)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Edit(.env)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pytest -q || exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

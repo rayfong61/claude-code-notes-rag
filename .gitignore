@@ -1,1 +1,13 @@
 .claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets
+.env
+
+# Generated RAG index
+data/index.json
