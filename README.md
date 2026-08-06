@@ -32,7 +32,7 @@ data/index.json         ingest.py 產出的向量索引（不進版控，需自�
 backend/ingest.py       chunk + embed 筆記，建立索引
 backend/store.py        cosine similarity 向量檢索
 backend/rag.py           檢索 + 組 prompt + 呼叫 Claude 生成回答
-backend/main.py          FastAPI app（/ask、/health）
+backend/main.py          FastAPI app（/ask、/ask/stream、/health）
 frontend/index.html      問答介面
 tests/test_rag.py        pytest：chunking、檢索排序、/ask smoke test
 scripts/reindex.py        headless 模式可呼叫的重建索引指令
@@ -72,14 +72,14 @@ scripts/reindex.py        headless 模式可呼叫的重建索引指令
 
 | 筆記 | 在這個專案裡怎麼用 |
 |---|---|
-| A CLAUDE.md That Follows | 開工前先寫 `CLAUDE.md`，界定技術棧與開發慣例（測試必過、`.env` 保密、chunk 規則） |
+| A CLAUDE.md That Follows | 開工前先寫 `CLAUDE.md`，界定技術棧與開發慣例（測試必過、`.env` 保密、chunk 規則），後續又用 `/init` 補強成含常用指令、架構說明的完整版 |
 | Permission Modes | `.claude/settings.json` 針對 Python 專案客製 `allow` 清單，減少重複確認 |
 | Routines and Headless | `scripts/reindex.py` 設計成可被 `claude -p` headless 模式呼叫，重建向量索引 |
-| Steering Long Sessions | 開發 RAG 後端核心時用 Plan Mode 先界定範圍，再逐步實作 |
+| Steering Long Sessions | 開發 RAG 後端核心、多輪對話與 streaming 功能時用 Plan Mode 先界定範圍，再逐步實作 |
 | Verification Skills | `.claude/skills/verification/` 定義「改完程式碼要跑測試、看 diff」的固定驗證流程 |
-| Hooks | `.claude/settings.json` 加入 `PostToolUse` hook，Edit/Write 後自動跑 `pytest -q` |
-| Trust It: Verifying Unsupervised Runs | 每個 Phase 完成後實際執行 `pytest` 與 API smoke test 驗證，而非只看 Claude 的文字摘要 |
-| Plugins | 概念性練習（見 `data/notes/plugins.md`），本專案規模小暫未實際安裝 Plugin |
-| GitHub Actions and Code Review | 需要 push 到 GitHub 才能實作，屬於後續 stretch 項目 |
+| Hooks | `.claude/settings.json` 加入 `PostToolUse` hook，Edit/Write 後自動跑 `pytest -q`；實際遇過一次真實的 rate-limit 失敗被 hook 擋下，驗證了它會真的阻擋、不是紙上談兵 |
+| Trust It: Verifying Unsupervised Runs | 每個 Phase 完成後實際執行 `pytest` 與 API smoke test（例如用 curl 驗證 SSE streaming 輸出）驗證，而非只看 Claude 的文字摘要 |
+| Plugins | 尚未實際安裝/使用 plugin，留待後續練習 |
+| GitHub Actions and Code Review | Repo 已建立並 push 到 [rayfong61/claude-code-notes-rag](https://github.com/rayfong61/claude-code-notes-rag)，但尚未設定 CI workflow 或 PR 自動 code review，留待後續練習 |
 
 完整計畫見 [`docs/PLAN.md`](docs/PLAN.md)。
