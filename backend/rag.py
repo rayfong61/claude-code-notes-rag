@@ -1,12 +1,25 @@
 """Retrieve relevant note chunks and generate a cited answer with Claude."""
+import logging
+
 import anthropic
 import voyageai
 
 from .store import VectorStore
 
+logger = logging.getLogger(__name__)
+
 EMBED_MODEL = "voyage-3-lite"
 CHAT_MODEL = "claude-sonnet-4-5"
 TOP_K = 4
+
+# Below this cosine similarity, the best match is treated as "not actually
+# relevant" and we skip calling Claude rather than let it guess from a
+# tenuous chunk (e.g. one-word or off-topic questions). Calibrated against
+# real voyage-3-lite scores: an on-topic question like "Hooks 是什麼？" scores
+# ~0.78 on its best chunk, while a garbage one-letter query still scores
+# ~0.45 (embeddings of short/near-empty text land close to everything).
+MIN_RELEVANCE_SCORE = 0.55
+NO_MATCH_ANSWER = "這個問題在筆記裡找不到相關內容，麻煩換個問題或提供更多細節。"
 
 SYSTEM_PROMPT = """You are a Q&A assistant over a set of Claude Code study notes,
 having a multi-turn conversation with the user. Answer only using the provided
@@ -28,6 +41,11 @@ class RagPipeline:
             [question], model=EMBED_MODEL, input_type="query"
         ).embeddings[0]
         matches = self.store.search(query_embedding, top_k=top_k)
+        logger.info(
+            "retrieval question=%r matches=%s",
+            question,
+            [(m["title"], round(m["score"], 3)) for m in matches],
+        )
 
         context = "\n\n---\n\n".join(f"[{m['title']}]\n{m['text']}" for m in matches)
         user_message = f"Context:\n{context}\n\nQuestion: {question}"
@@ -35,6 +53,10 @@ class RagPipeline:
         messages = [{"role": h["role"], "content": h["content"]} for h in history]
         messages.append({"role": "user", "content": user_message})
         return messages, matches
+
+    @staticmethod
+    def _is_relevant(matches: list[dict]) -> bool:
+        return bool(matches) and matches[0]["score"] >= MIN_RELEVANCE_SCORE
 
     @staticmethod
     def _sources_from_matches(matches: list[dict]) -> list[dict]:
@@ -49,6 +71,10 @@ class RagPipeline:
 
     def ask(self, question: str, history: list[dict] | None = None, top_k: int = TOP_K) -> dict:
         messages, matches = self._retrieve(question, history or [], top_k)
+
+        if not self._is_relevant(matches):
+            logger.info("question=%r has no relevant match, skipping Claude call", question)
+            return {"answer": NO_MATCH_ANSWER, "sources": []}
 
         response = self.anthropic.messages.create(
             model=CHAT_MODEL,
@@ -66,6 +92,12 @@ class RagPipeline:
         """Yields {"type": "delta", "text": ...} chunks as Claude generates the
         answer, then a final {"type": "done", "sources": [...]}."""
         messages, matches = self._retrieve(question, history or [], top_k)
+
+        if not self._is_relevant(matches):
+            logger.info("question=%r has no relevant match, skipping Claude call", question)
+            yield {"type": "delta", "text": NO_MATCH_ANSWER}
+            yield {"type": "done", "sources": []}
+            return
 
         with self.anthropic.messages.stream(
             model=CHAT_MODEL,

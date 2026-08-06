@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.ingest import chunk_by_heading, parse_frontmatter
-from backend.rag import RagPipeline
+from backend.rag import NO_MATCH_ANSWER, RagPipeline
 from backend.store import VectorStore
 
 HAS_API_KEYS = bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(
@@ -164,3 +164,76 @@ def test_rag_pipeline_forwards_history_to_claude(tmp_path):
     assert sent_messages[-1]["role"] == "user"
     assert "它跟 CLAUDE.md 有什麼不同" in sent_messages[-1]["content"]
     assert result["answer"] == "測試回答，引用 CLAUDE.md。"
+
+
+class _FailingAnthropicMessages:
+    """Claude must never be called when retrieval found nothing relevant."""
+
+    def create(self, **kwargs):
+        raise AssertionError("Claude should not be called for an irrelevant question")
+
+    def stream(self, **kwargs):
+        raise AssertionError("Claude should not be called for an irrelevant question")
+
+
+class _FailingAnthropicClient:
+    def __init__(self):
+        self.messages = _FailingAnthropicMessages()
+
+
+def _irrelevant_index_path(tmp_path):
+    # _FakeVoyageClient always embeds queries as [1, 0, 0]; an orthogonal
+    # chunk embedding gives cosine similarity 0.0, well below the threshold.
+    fake_index = [
+        {"id": "a", "title": "Hooks", "source_url": "u1", "text": "hooks content", "embedding": [0.0, 1.0, 0.0]},
+    ]
+    index_path = tmp_path / "index.json"
+    index_path.write_text(json.dumps(fake_index), encoding="utf-8")
+    return index_path
+
+
+def test_ask_skips_claude_and_returns_no_match_answer_for_irrelevant_question(tmp_path):
+    pipeline = RagPipeline.__new__(RagPipeline)
+    pipeline.voyage = _FakeVoyageClient()
+    pipeline.anthropic = _FailingAnthropicClient()
+    pipeline.store = VectorStore(index_path=_irrelevant_index_path(tmp_path))
+
+    result = pipeline.ask("t")
+
+    assert result == {"answer": NO_MATCH_ANSWER, "sources": []}
+
+
+def test_ask_stream_skips_claude_and_yields_no_match_answer_for_irrelevant_question(tmp_path):
+    pipeline = RagPipeline.__new__(RagPipeline)
+    pipeline.voyage = _FakeVoyageClient()
+    pipeline.anthropic = _FailingAnthropicClient()
+    pipeline.store = VectorStore(index_path=_irrelevant_index_path(tmp_path))
+
+    events = list(pipeline.ask_stream("t"))
+
+    assert events == [
+        {"type": "delta", "text": NO_MATCH_ANSWER},
+        {"type": "done", "sources": []},
+    ]
+
+
+def test_ask_stream_endpoint_emits_error_event_on_exception(monkeypatch):
+    """A mid-stream exception (e.g. a rate limit) must surface as a clean
+    SSE error event instead of crashing the connection silently."""
+    import backend.main as main_module
+
+    class _FailingPipeline:
+        def ask_stream(self, question, history=None, top_k=4):
+            yield {"type": "delta", "text": "部分回答"}
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_module, "get_pipeline", lambda: _FailingPipeline())
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(main_module.app)
+    response = client.post("/ask/stream", json={"question": "test"})
+
+    assert response.status_code == 200
+    assert '"type": "delta"' in response.text
+    assert '"type": "error"' in response.text

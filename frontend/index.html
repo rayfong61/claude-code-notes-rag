@@ -334,6 +334,11 @@
           } else if (event.type === "done") {
             pendingMessage.sources = event.sources;
             renderChat();
+          } else if (event.type === "error") {
+            pendingMessage.pending = false;
+            pendingMessage.error = true;
+            pendingMessage.content = event.message;
+            renderChat();
           }
         }
       }
