@@ -38,6 +38,7 @@ tests/test_rag.py        pytest：chunking、檢索排序、/ask smoke test
 scripts/reindex.py        headless 模式可呼叫的重建索引指令
 .claude/settings.json     權限模式 + PostToolUse Hook（自動跑測試）
 .claude/skills/verification/  Verification Skill
+plugins/                  把 Hook + Verification Skill 打包成的可安裝 Plugin（含本機 Marketplace manifest）
 ```
 
 ## 啟動方式
@@ -79,7 +80,7 @@ scripts/reindex.py        headless 模式可呼叫的重建索引指令
 | Verification Skills | `.claude/skills/verification/` 定義「改完程式碼要跑測試、看 diff」的固定驗證流程 |
 | Hooks | `.claude/settings.json` 加入 `PostToolUse` hook，Edit/Write 後自動跑 `pytest -q`；實際遇過一次真實的 rate-limit 失敗被 hook 擋下，驗證了它會真的阻擋、不是紙上談兵 |
 | Trust It: Verifying Unsupervised Runs | 每個 Phase 完成後實際執行 `pytest` 與 API smoke test（例如用 curl 驗證 SSE streaming 輸出）驗證，而非只看 Claude 的文字摘要 |
-| Plugins | 尚未實際安裝/使用 plugin，留待後續練習 |
+| Plugins | 把專案的 Hook + Verification Skill 打包成可安裝的 Plugin，見 [`plugins/pytest-verification-toolkit`](plugins/pytest-verification-toolkit)（含本機 Marketplace manifest） |
 | GitHub Actions and Code Review | Repo 已建立並 push 到 [rayfong61/claude-code-notes-rag](https://github.com/rayfong61/claude-code-notes-rag)，但尚未設定 CI workflow 或 PR 自動 code review，留待後續練習 |
 
 完整計畫見 [`docs/PLAN.md`](docs/PLAN.md)。

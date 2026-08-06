@@ -1,0 +1,6 @@
+{
+  "name": "pytest-verification-toolkit",
+  "version": "0.1.0",
+  "description": "Auto-run pytest after Edit/Write in Python projects, plus a verification skill that checks tests pass, the diff matches intent, and no assertions were weakened.",
+  "author": { "name": "rayfong61" }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "learn-claude-code-marketplace",
+  "owner": { "name": "rayfong61" },
+  "plugins": [
+    {
+      "name": "pytest-verification-toolkit",
+      "source": "./pytest-verification-toolkit",
+      "description": "Auto-run pytest after Edit/Write, plus a verification skill that checks tests pass and the diff matches intent."
+    }
+  ]
+}
